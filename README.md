@@ -106,6 +106,3 @@ Os nodes aparecem na categoria:
 
 MIT
 
-```
-::contentReference[oaicite:0]{index=0}
-```
