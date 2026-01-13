@@ -3,12 +3,14 @@ from typing import Any, Dict, List
 
 PIPE_MARKER = "__fabio_dynamic_pipe__"
 
+
 def _env_int(name: str, default: int) -> int:
     try:
         v = int(os.environ.get(name, "").strip())
         return v if v > 0 else default
     except Exception:
         return default
+
 
 MAX_OUTPUTS = _env_int("FABIO_DYNAMIC_PIPE_MAX_OUTPUTS", 128)
 

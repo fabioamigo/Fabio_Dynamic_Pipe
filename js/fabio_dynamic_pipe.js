@@ -20,10 +20,75 @@ function sanitizeBaseName(s) {
   return base;
 }
 
-function uniqueName(base, counters) {
-  const n = (counters[base] ?? 0) + 1;
-  counters[base] = n;
-  return n === 1 ? base : `${base}_${n}`;
+function looksLikeGraph(g) {
+  return g && typeof g === "object" && (Array.isArray(g._nodes) || Array.isArray(g.nodes));
+}
+
+function getGraphNodes(g) {
+  if (!g) return [];
+  if (Array.isArray(g._nodes)) return g._nodes;
+  if (Array.isArray(g.nodes)) return g.nodes;
+  return [];
+}
+
+function getSubgraphGraphFromNode(node) {
+  if (!node || typeof node !== "object") return null;
+
+  const candidates = [
+    node.subgraph,
+    node.subgraph?.graph,
+    node.subGraph,
+    node.subGraph?.graph,
+    node.subgraph_graph,
+    node.subgraphGraph,
+    node.inner_graph,
+    node.innerGraph,
+    node.properties?.subgraph,
+    node.properties?.subgraph?.graph,
+    node.properties?.subGraph,
+    node.properties?.subGraph?.graph,
+    node.properties?.inner_graph,
+  ];
+
+  for (const c of candidates) {
+    if (looksLikeGraph(c)) return c;
+  }
+  return null;
+}
+
+function collectAllGraphs(rootGraph) {
+  const root = rootGraph ?? app?.graph;
+  const graphs = [];
+  const visited = new Set();
+
+  const walk = (g) => {
+    if (!looksLikeGraph(g) || visited.has(g)) return;
+    visited.add(g);
+    graphs.push(g);
+
+    for (const n of getGraphNodes(g)) {
+      const sg = getSubgraphGraphFromNode(n);
+      if (sg) walk(sg);
+    }
+  };
+
+  walk(root);
+  return graphs;
+}
+
+function buildNodeIndexDeep() {
+  const graphs = collectAllGraphs(app?.graph);
+  const map = new Map();
+
+  for (const g of graphs) {
+    for (const n of getGraphNodes(g)) {
+      if (!n || n.id == null) continue;
+      const idNum = Number(n.id);
+      if (!Number.isNaN(idNum) && !map.has(idNum)) map.set(idNum, n);
+    }
+  }
+
+  return { graphs, map };
 }
 
 function isConnectedInput(inp) {
@@ -35,18 +100,12 @@ function hasLinks(out) {
 }
 
 function markDirty(node) {
-  try {
-    node.setDirtyCanvas(true, true);
-  } catch (e) {}
-  try {
-    app.canvas.setDirty(true, true);
-  } catch (e) {}
+  try { node.setDirtyCanvas(true, true); } catch (e) {}
+  try { app.canvas.setDirty(true, true); } catch (e) {}
 }
 
 function refreshNodeSize(node) {
-  try {
-    node.setSize(node.computeSize());
-  } catch (e) {}
+  try { node.setSize(node.computeSize()); } catch (e) {}
 }
 
 function setSlotName(slot, name) {
@@ -88,40 +147,100 @@ function getLinkObj(graph, linkId) {
   return null;
 }
 
-function getLinkTypeFromInput(node, inp) {
+function getLinkObjDeep(graphs, preferredGraph, linkId) {
+  let link = getLinkObj(preferredGraph, linkId) ?? getLinkObj(app?.graph, linkId);
+  if (link) return link;
+
+  for (const g of graphs) {
+    if (!g || g === preferredGraph || g === app?.graph) continue;
+    link = getLinkObj(g, linkId);
+    if (link) return link;
+  }
+
+  return null;
+}
+
+function linkTargetId(link) {
+  if (!link) return null;
+  if (Array.isArray(link)) return link[3] ?? null; // [id, origin_id, origin_slot, target_id, target_slot, type]
+  return (
+    link.target_id ??
+    link.targetId ??
+    link.to_id ??
+    link.toId ??
+    link.target ??
+    null
+  );
+}
+
+function linkType(link) {
+  if (!link) return "*";
+  if (Array.isArray(link)) return link[5] ?? "*";
+  return link.type ?? link.datatype ?? link.data_type ?? link.dataType ?? "*";
+}
+
+function getLinkTypeFromInputDeep(node, inp, graphs) {
   let t = "*";
   const g = node?.graph ?? app?.graph;
-  const link = getLinkObj(g, inp?.link) ?? getLinkObj(app?.graph, inp?.link);
-  if (link) {
-    t = link.type ?? link.datatype ?? link.data_type ?? link.dataType ?? t;
-  }
+  const link = getLinkObjDeep(graphs, g, inp?.link);
+  if (link) t = linkType(link) ?? t;
   return t ?? "*";
 }
 
 function ensureTrailingOptionalInput(node) {
   if (!node.inputs) node.inputs = [];
+
   if (node.inputs.length === 0) {
     node.addInput("optional", "*");
     return;
   }
 
-  while (node.inputs.length > 0 && isConnectedInput(node.inputs[node.inputs.length - 1])) {
+  const last = () => node.inputs[node.inputs.length - 1];
+
+  while (node.inputs.length > 0 && isConnectedInput(last())) {
     node.addInput("optional", "*");
   }
 
   while (node.inputs.length >= 2) {
-    const last = node.inputs[node.inputs.length - 1];
-    const prev = node.inputs[node.inputs.length - 2];
+    const a = node.inputs[node.inputs.length - 1];
+    const b = node.inputs[node.inputs.length - 2];
 
-    const lastIsOpt = (last?.name ?? "") === "optional" && !isConnectedInput(last);
-    const prevIsOpt = (prev?.name ?? "") === "optional" && !isConnectedInput(prev);
+    const aOpt = String(a?.name ?? "") === "optional" || String(a?.name ?? "") === "";
+    const bOpt = String(b?.name ?? "") === "optional" || String(b?.name ?? "") === "";
 
-    if (lastIsOpt && prevIsOpt) node.removeInput(node.inputs.length - 1);
+    const aRem = aOpt && !isConnectedInput(a);
+    const bRem = bOpt && !isConnectedInput(b);
+
+    if (aRem && bRem) node.removeInput(node.inputs.length - 1);
     else break;
   }
 }
 
-function computeSchemaFromPipeIn(node) {
+/**
+ * Fix: ao mover Pipe In para dentro de subgraph, algumas versões reidratam
+ * com 1 input "optional" extra no começo. Regra do pacote: optional só no final.
+ */
+function normalizePipeInInputs(node) {
+  if (!node || !Array.isArray(node.inputs)) return;
+
+  while (node.inputs.length > 1) {
+    const first = node.inputs[0];
+    const nm = String(first?.name ?? "");
+    const isOptLike = nm === "optional" || nm === "";
+    if (!isOptLike) break;
+    if (isConnectedInput(first)) break;
+
+    const hasConnectedLater = node.inputs.slice(1).some((x) => isConnectedInput(x));
+    if (!hasConnectedLater) break;
+
+    node.removeInput(0);
+  }
+
+  ensureTrailingOptionalInput(node);
+  refreshNodeSize(node);
+}
+
+function computeSchemaFromInputsDeep(node, graphs) {
   const counters = {};
   const schema = [];
 
@@ -130,14 +249,22 @@ function computeSchemaFromPipeIn(node) {
   for (const inp of node.inputs) {
     if (!isConnectedInput(inp)) continue;
 
-    const linkType = getLinkTypeFromInput(node, inp);
-    const base = sanitizeBaseName(linkType);
-    const name = uniqueName(base, counters);
+    const t = getLinkTypeFromInputDeep(node, inp, graphs);
+    const base = sanitizeBaseName(t);
+    counters[base] = (counters[base] ?? 0) + 1;
+    const name = counters[base] === 1 ? base : `${base}_${counters[base]}`;
 
-    schema.push({ name, type: linkType });
+    schema.push({ name, type: t });
   }
 
   return schema;
+}
+
+function normalizeSchema(schema) {
+  if (!Array.isArray(schema)) return [];
+  return schema
+    .filter((x) => x && typeof x === "object")
+    .map((x) => ({ name: String(x.name ?? "any"), type: x.type ?? "*" }));
 }
 
 function applySchemaToPipeInInputs(node, schema) {
@@ -160,38 +287,21 @@ function applySchemaToPipeInInputs(node, schema) {
   refreshNodeSize(node);
 }
 
-function normalizeSchema(schema) {
-  if (!Array.isArray(schema)) return [];
-  return schema
-    .filter((x) => x && typeof x === "object")
-    .map((x) => ({ name: String(x.name ?? "any"), type: x.type ?? "*" }));
-}
-
 function applyPipeOutDefault(node) {
   if (!Array.isArray(node.outputs)) node.outputs = [];
 
-  // mantém quaisquer outputs que já tenham links (workflow antigo)
-  // e garante pelo menos 1 output visível
-  if (node.outputs.length === 0) {
-    node.addOutput("out_1", "*");
-  }
+  if (node.outputs.length === 0) node.addOutput("out_1", "*");
 
-  // garante que o primeiro exista e fique visível
   const first = node.outputs[0];
   setSlotName(first, first?.name ?? "out_1");
   first.type = first.type ?? "*";
   first.hidden = false;
 
-  // para outputs >0: se não estiverem conectados, remove (ou oculta) para o node "nascer" enxuto
-  // preferi REMOVER para não aparecer uma lista gigante ao criar o node
+  // nascer “enxuto”: remove outputs >0 que não têm links
   for (let i = node.outputs.length - 1; i >= 1; i--) {
     const out = node.outputs[i];
-    if (hasLinks(out)) {
-      // se tiver links, mantém visível
-      out.hidden = false;
-    } else {
-      node.removeOutput(i);
-    }
+    if (hasLinks(out)) out.hidden = false;
+    else node.removeOutput(i);
   }
 
   refreshNodeSize(node);
@@ -213,9 +323,7 @@ function applySchemaToPipeOutOutputs(node, schemaRaw) {
 
   const desired = Math.max(schema.length, maxConnectedIndex + 1, 1);
 
-  while (node.outputs.length < desired) {
-    node.addOutput("unused", "*");
-  }
+  while (node.outputs.length < desired) node.addOutput("unused", "*");
 
   for (let i = 0; i < node.outputs.length; i++) {
     const out = node.outputs[i];
@@ -226,7 +334,6 @@ function applySchemaToPipeOutOutputs(node, schemaRaw) {
       out.type = schema[i].type ?? "*";
       out.hidden = false;
     } else {
-      // mantém outputs conectados visíveis para não quebrar grafos
       const nm = connected ? `orphan_${i + 1}` : `unused_${i + 1}`;
       setSlotName(out, nm);
       out.type = "*";
@@ -234,7 +341,6 @@ function applySchemaToPipeOutOutputs(node, schemaRaw) {
     }
   }
 
-  // remove outputs excedentes do fim se não estiverem conectados
   while (node.outputs.length > Math.max(schema.length, 1)) {
     const lastIndex = node.outputs.length - 1;
     const last = node.outputs[lastIndex];
@@ -246,56 +352,109 @@ function applySchemaToPipeOutOutputs(node, schemaRaw) {
   refreshNodeSize(node);
 }
 
-function findDownstreamPipeOutNodesLive(pipeInNode) {
-  const g = pipeInNode?.graph ?? app?.graph;
-  if (!g) return [];
+function isPipeOut(n) {
+  return n && (n.comfyClass === PIPE_OUT || n.type === PIPE_OUT);
+}
 
-  const visitedNodeIds = new Set();
-  const queue = [pipeInNode];
+function isPipeIn(n) {
+  return n && (n.comfyClass === PIPE_IN || n.type === PIPE_IN);
+}
+
+function uniqueById(nodes) {
+  const out = [];
+  const seen = new Set();
+  for (const n of nodes) {
+    const id = Number(n?.id);
+    if (Number.isNaN(id)) continue;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push(n);
+  }
+  return out;
+}
+
+/**
+ * Tenta achar PipeOuts “downstream” por BFS (funciona em muitos casos),
+ * mas pode falhar em fronteiras de subgraph dependendo da versão/impl.
+ */
+function findDownstreamPipeOutNodesLive(startNode) {
+  const { graphs, map } = buildNodeIndexDeep();
+
+  const visited = new Set();
+  const queue = [startNode];
   const outNodes = [];
-
-  const isPipeOut = (n) => n && (n.comfyClass === PIPE_OUT || n.type === PIPE_OUT);
 
   while (queue.length) {
     const node = queue.shift();
-    if (!node || visitedNodeIds.has(node.id)) continue;
-    visitedNodeIds.add(node.id);
+    if (!node || node.id == null) continue;
 
-    if (isPipeOut(node) && node !== pipeInNode) outNodes.push(node);
+    const idNum = Number(node.id);
+    if (visited.has(idNum)) continue;
+    visited.add(idNum);
+
+    if (isPipeOut(node) && node !== startNode) outNodes.push(node);
 
     const outs = Array.isArray(node.outputs) ? node.outputs : [];
     for (const o of outs) {
       if (!o || !Array.isArray(o.links)) continue;
 
       for (const linkId of o.links) {
-        const link = getLinkObj(g, linkId) ?? getLinkObj(app?.graph, linkId);
+        const preferredGraph = node?.graph ?? startNode?.graph ?? app?.graph;
+        const link = getLinkObjDeep(graphs, preferredGraph, linkId);
         if (!link) continue;
 
-        const targetId = link.target_id ?? link.targetId ?? link.to_id ?? link.toId;
-        if (targetId == null) continue;
+        const tid = linkTargetId(link);
+        if (tid == null) continue;
 
-        const targetNode = getNodeByIdGlobal(Number(targetId));
-        if (targetNode && !visitedNodeIds.has(targetNode.id)) queue.push(targetNode);
+        const targetNode = map.get(Number(tid)) ?? getNodeByIdGlobal(Number(tid));
+        if (targetNode) queue.push(targetNode);
       }
     }
   }
 
-  return outNodes;
+  return uniqueById(outNodes);
 }
 
-function findPipeOutNodesFallbackAnyConnected() {
-  const nodes = app?.graph?._nodes;
-  if (!Array.isArray(nodes)) return [];
-
+/**
+ * Fallback 1: pega PipeOuts já marcados pelo mesmo PipeIn (evita “puxar” outros pipes).
+ */
+function findPipeOutNodesTaggedBy(pipeInId) {
+  const { graphs } = buildNodeIndexDeep();
   const result = [];
-  for (const n of nodes) {
-    const isPipeOut = n && (n.comfyClass === PIPE_OUT || n.type === PIPE_OUT);
-    if (!isPipeOut) continue;
 
-    const inp = Array.isArray(n.inputs) ? n.inputs[0] : null;
-    if (inp && inp.link != null) result.push(n);
+  for (const g of graphs) {
+    for (const n of getGraphNodes(g)) {
+      if (!isPipeOut(n)) continue;
+      const from = n?.properties?.fabio_dynamic_pipe_schema_from;
+      if (from == null) continue;
+      if (Number(from) !== Number(pipeInId)) continue;
+      result.push(n);
+    }
   }
-  return result;
+
+  return uniqueById(result);
+}
+
+/**
+ * Fallback 2: scan profundo — atualiza PipeOuts que estejam conectados a um link FABIO_PIPE.
+ * Isso é o que salva quando o ComfyUI “quebra” a travessia entre subgraphs na API de links.
+ */
+function findPipeOutNodesWithPipeInput() {
+  const { graphs } = buildNodeIndexDeep();
+  const result = [];
+
+  for (const g of graphs) {
+    for (const n of getGraphNodes(g)) {
+      if (!isPipeOut(n)) continue;
+      const inp0 = Array.isArray(n.inputs) ? n.inputs[0] : null;
+      if (!inp0 || inp0.link == null) continue;
+
+      const t = getLinkTypeFromInputDeep(n, inp0, graphs);
+      if (t === PIPE_LINK_TYPE) result.push(n);
+    }
+  }
+
+  return uniqueById(result);
 }
 
 function ensureUpdateButton(node) {
@@ -303,11 +462,8 @@ function ensureUpdateButton(node) {
   if (exists) return;
 
   const w = node.addWidget("button", "Update", "update", () => {
-    try {
-      node.fabioUpdateDynamicPipe?.();
-    } catch (e) {
-      console.error("[FabioDynamicPipe] update error:", e);
-    }
+    try { node.fabioUpdateDynamicPipe?.(); }
+    catch (e) { console.error("[FabioDynamicPipe] update error:", e); }
   });
 
   w.options = w.options ?? {};
@@ -316,14 +472,15 @@ function ensureUpdateButton(node) {
 }
 
 function initPipeInNode(node) {
-  ensureTrailingOptionalInput(node);
+  normalizePipeInInputs(node);
   ensureUpdateButton(node);
 
   node.fabioUpdateDynamicPipe = () => {
-    ensureTrailingOptionalInput(node);
+    normalizePipeInInputs(node);
 
-    const schema = computeSchemaFromPipeIn(node);
-    log("schema:", schema);
+    const { graphs } = buildNodeIndexDeep();
+    const schema = normalizeSchema(computeSchemaFromInputsDeep(node, graphs));
+    log("PipeIn schema:", schema);
 
     node.properties = node.properties ?? {};
     node.properties.fabio_dynamic_pipe_schema = schema;
@@ -331,8 +488,14 @@ function initPipeInNode(node) {
 
     applySchemaToPipeInInputs(node, schema);
 
+    // 1) BFS (quando dá)
     let outs = findDownstreamPipeOutNodesLive(node);
-    if (!outs.length) outs = findPipeOutNodesFallbackAnyConnected();
+
+    // 2) Se BFS falhar: os que já foram marcados anteriormente por este PipeIn
+    if (!outs.length) outs = findPipeOutNodesTaggedBy(node.id);
+
+    // 3) Último fallback: scan profundo por tipo de link (funciona atravessando subgraphs)
+    if (!outs.length) outs = findPipeOutNodesWithPipeInput();
 
     for (const outNode of outs) {
       outNode.properties = outNode.properties ?? {};
@@ -350,13 +513,8 @@ function initPipeInNode(node) {
 
 function initPipeOutNode(node) {
   const schema = node?.properties?.fabio_dynamic_pipe_schema;
-
-  if (Array.isArray(schema)) {
-    applySchemaToPipeOutOutputs(node, schema);
-  } else {
-    // IMPORTANTE: node "nasce" enxuto: só 1 output
-    applyPipeOutDefault(node);
-  }
+  if (Array.isArray(schema)) applySchemaToPipeOutOutputs(node, schema);
+  else applyPipeOutDefault(node);
 
   markDirty(node);
 }
@@ -372,7 +530,7 @@ app.registerExtension({
       nodeType.prototype.onConnectionsChange = function (side) {
         const r = orig?.apply(this, arguments);
         if (side === 1) {
-          ensureTrailingOptionalInput(this);
+          normalizePipeInInputs(this);
           refreshNodeSize(this);
           markDirty(this);
         }
@@ -391,6 +549,7 @@ app.registerExtension({
       initPipeInNode(node);
       const schema = node?.properties?.fabio_dynamic_pipe_schema;
       if (Array.isArray(schema)) applySchemaToPipeInInputs(node, schema);
+      normalizePipeInInputs(node);
       refreshNodeSize(node);
       markDirty(node);
     }
