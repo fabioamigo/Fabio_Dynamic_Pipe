@@ -1,108 +1,79 @@
 # Fabio Dynamic Pipe (ComfyUI Custom Nodes)
 
-Pacote de custom nodes para ComfyUI que permite **empacotar múltiplas conexões em um único "pipe"** e depois **desempacotar** do outro lado, preservando a **ordem**.
+**Fabio Dynamic Pipe** is a small utility package for ComfyUI that lets you **pack multiple values into a single connection** (“pipe”) and later **unpack them back into individual outputs**, preserving **order** and using **type-based port names**.
+
+This is designed to keep graphs clean and to route several objects (MODEL / CLIP / LATENT / IMAGE / INT / FLOAT / etc.) through a single link, including across **Reroute** nodes and **Subgraphs**.
 
 ---
 
-## O que isso resolve
+## Included Nodes
 
-No ComfyUI, às vezes você quer “passar” vários objetos diferentes (ex.: `model`, `clip`, `latent`, `int`, `float`…) por **uma única conexão** no grafo — seja para simplificar o layout, evitar fios cruzando tudo ou modularizar sub-grafos.
+### 1) Fabio Dynamic Pipe In
+**Purpose:** Pack N inputs into 1 output.
 
-Este pacote cria um **pipe** que carrega uma lista ordenada de valores, e no outro lado você recupera cada item em portas separadas, mantendo a ordem original.
+- **Dynamic inputs:** effectively unlimited.
+- Always keeps **one trailing optional** input at the end.
+- When the trailing optional input is connected, a **new optional input** is created automatically.
+- Provides an **Update** button:
+  - Detects connected input types
+  - Renames inputs using type-based names (`model`, `clip`, `latent`, `image`, `int`, `float`, ...)
+  - Ensures unique names for repeated types (`int`, `int_2`, `int_3`, ...)
+  - Propagates the schema downstream to update one or many **Pipe Out** nodes (including through Reroutes and across Subgraphs).
 
----
+### 2) Fabio Dynaamic Pipe Out
+**Purpose:** Unpack 1 pipe into N outputs.
 
-## Nodes
+- Outputs mirror the Pipe In schema (**same count, same order**).
+- On creation, it starts minimal (only the first output is visible).
+- After pressing **Update** on the corresponding Pipe In, outputs are resized and renamed accordingly.
 
-### 1) Fabio Pipe In
-
-**Função:** empacotar N entradas em 1 saída (`FABIO_PIPE`).
-
-**Características:**
-- Entradas **dinâmicas** (sem limite prático, limitado por `MAX_SLOTS` no código).
-- Regra de UI: sempre existe **1 entrada extra** no final; quando essa entrada final for **conectada/preenchida**, o nó cria automaticamente **mais uma** entrada opcional.
-
-**Nome das portas (UI):**
-- As entradas são rotuladas pelo **tipo do dado** do que estiver conectado (ex.: `int`, `float`, `model`, `clip`, `latent`…).
-- Se houver tipos repetidos, o rótulo ganha sufixos: `model`, `model_2`, `model_3`…
-
-> Observação: o nome interno dos inputs (ex.: `in_01`, `in_02`…) não é alterado para não quebrar o workflow; apenas o **label visual** muda.
-
----
-
-### 2) Fabio Pipe Out
-
-**Função:** receber a saída do Pipe In (`FABIO_PIPE`) e **desempacotar** em múltiplas saídas.
-
-**Características:**
-- As saídas **espelham** as entradas do Pipe In: mesma quantidade e **mesma ordem**.
-- Quando surge uma nova entrada no Pipe In, surge automaticamente uma nova saída no Pipe Out (via UI).
-
-**Nome das portas (UI):**
-- As saídas recebem nomes conforme os labels calculados no Pipe In:
-  - Ex.: `int`, `float`, `model`, `model_2`, etc.
+> Note: The backend returns a bounded number of outputs (configurable). The UI shows only the schema-defined outputs.
 
 ---
 
-## Instalação
+## Installation
 
-### Via git clone
+1. Copy or clone this repository into:
 
-Dentro de `ComfyUI/custom_nodes`:
+`ComfyUI/custom_nodes/Fabio_Dynamic_Pipe/`
 
-```bash
-git clone https://github.com/SEU_USUARIO/Fabio_Dynamic_Pipe.git
-````
+2. Restart ComfyUI.
 
-Depois:
-
-1. Reinicie o ComfyUI
-2. Faça hard refresh no navegador (Ctrl+F5)
+3. After updating the JS, hard reload your browser (Ctrl+Shift+R).
 
 ---
 
-## Estrutura do projeto
+## Usage
 
-```
-Fabio_Dynamic_Pipe/
-  __init__.py
-  nodes.py
-  js/
-    fabio_dynamic_pipe.js
-  README.md
-  LICENSE
-  .gitignore
-```
-
-* Backend (Python): define tipos, empacota e desempacota.
-* Frontend (JS): controla a UI dinâmica (criar/remover portas e atualizar labels).
+1. Add **Fabio Dynamic Pipe In**
+2. Connect as many inputs as you want (INT / FLOAT / IMAGE / etc.)
+3. Click **Update** on the Pipe In node
+4. Connect Pipe In **pipe** output to **Fabio Dynaamic Pipe Out**
+5. Use the mirrored outputs from Pipe Out
 
 ---
 
-## Configuração / Limites
+## Configuration
 
-Por padrão, o projeto usa:
+### Environment Variables
 
-* `MAX_SLOTS = 64`
-
-Você pode aumentar para 128/256 alterando:
-
-* `MAX_SLOTS` em `nodes.py`
-* `MAX_SLOTS` em `js/fabio_dynamic_pipe.js`
+- `FABIO_DYNAMIC_PIPE_MAX_OUTPUTS`
+  - Default: `128`
+  - Maximum number of unpacked outputs returned by the backend.
 
 ---
 
-## Categoria no ComfyUI
+## Subgraphs Support
 
-Os nodes aparecem na categoria:
+This package is intended to work when Pipe In and Pipe Out are:
+- inside the same Subgraph
+- inside different Subgraphs
+- connected through one or more Reroute nodes
 
-* `Fabio Dynamic Pipe`
-
-(Se você mudar a string `CATEGORY` no Python, ajuste também se o JS depender do match por categoria.)
+The Update action is triggered from **Pipe In** and attempts to reach all downstream **Pipe Out** nodes.
 
 ---
 
-## Licença
+## License
 
-MIT
-
+Add a `LICENSE` file (MIT is a common choice) if your repository does not already include one.

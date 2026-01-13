@@ -1,102 +1,86 @@
-from __future__ import annotations
+import os
+from typing import Any, Dict, List
 
-from typing import Any, Dict, List, Tuple
+PIPE_MARKER = "__fabio_dynamic_pipe__"
 
+def _env_int(name: str, default: int) -> int:
+    try:
+        v = int(os.environ.get(name, "").strip())
+        return v if v > 0 else default
+    except Exception:
+        return default
 
-# ===== Ajuste aqui se quiser mais/menos portas =====
-MAX_SLOTS = 64
+MAX_OUTPUTS = _env_int("FABIO_DYNAMIC_PIPE_MAX_OUTPUTS", 128)
 
-
-class AnyType(str):
-    """
-    Tipo "coringa" que tende a passar pelos checks de tipo do Comfy/LiteGraph
-    (usa o truque de nunca ser "diferente" em comparações de desigualdade).
-    """
-    def __ne__(self, __value: object) -> bool:
-        return False
-
-
-ANY_TYPE = AnyType("*")
+FABIO_PIPE_TYPE = "FABIO_PIPE"
 
 
-class FabioPipeIn:
-    """
-    Empacota N entradas (dinâmicas na UI) em uma única saída do tipo FABIO_PIPE.
-    """
-
+class FabioDynamicPipeIn:
     @classmethod
-    def INPUT_TYPES(cls):
-        # O Comfy exige a chave "required" (pode ser vazia).
-        # Inputs "optional" só entram na execução se estiverem conectados.
-        optional: Dict[str, Tuple[Any, Dict[str, Any]]] = {}
-        for i in range(1, MAX_SLOTS + 1):
-            key = f"in_{i:02d}"
-            optional[key] = (ANY_TYPE, {"forceInput": True})
-        return {"required": {}, "optional": optional}
+    def INPUT_TYPES(cls) -> Dict[str, Dict[str, Any]]:
+        # Entradas são dinâmicas via JS; o backend aceita **kwargs.
+        return {"required": {}, "optional": {}}
 
-    RETURN_TYPES = ("FABIO_PIPE",)
+    RETURN_TYPES = (FABIO_PIPE_TYPE,)
     RETURN_NAMES = ("pipe",)
     FUNCTION = "pack"
     CATEGORY = "Fabio/Dynamic Pipe"
 
-    @classmethod
-    def VALIDATE_INPUTS(cls, input_types=None, **kwargs):
-        # Ao aceitar `input_types`, o Comfy pula a validação padrão de tipos.
-        # Isso é útil para entradas coringa/dinâmicas. :contentReference[oaicite:2]{index=2}
-        return True
-
     def pack(self, **kwargs):
-        # kwargs conterá apenas os inputs opcionais conectados.
-        items: List[Any] = []
+        names: List[str] = []
+        values: List[Any] = []
 
-        def idx(k: str) -> int:
-            # "in_01" -> 1
-            try:
-                return int(k.split("_", 1)[1])
-            except Exception:
-                return 10**9
+        for k, v in kwargs.items():
+            if v is None:
+                continue
+            names.append(k)
+            values.append(v)
 
-        for k in sorted(kwargs.keys(), key=idx):
-            v = kwargs.get(k, None)
-            if v is not None:
-                items.append(v)
-
-        pipe = {"items": items}
+        pipe = {
+            PIPE_MARKER: True,
+            "names": names,
+            "values": values,
+        }
         return (pipe,)
 
 
-class FabioPipeOut:
-    """
-    Desempacota o pipe em até MAX_SLOTS saídas (a UI esconde/mostra conforme necessário).
-    """
-
+class FabioDynamicPipeOut:
     @classmethod
-    def INPUT_TYPES(cls):
-        return {"required": {"pipe": ("FABIO_PIPE", {})}}
+    def INPUT_TYPES(cls) -> Dict[str, Dict[str, Any]]:
+        return {"required": {"pipe": (FABIO_PIPE_TYPE,)}}
 
-    RETURN_TYPES = tuple([ANY_TYPE] * MAX_SLOTS)
-    RETURN_NAMES = tuple([f"out_{i:02d}" for i in range(1, MAX_SLOTS + 1)])
+    RETURN_TYPES = tuple(["*"] * MAX_OUTPUTS)
+    RETURN_NAMES = tuple([f"out_{i+1}" for i in range(MAX_OUTPUTS)])
     FUNCTION = "unpack"
     CATEGORY = "Fabio/Dynamic Pipe"
 
-    @classmethod
-    def VALIDATE_INPUTS(cls, input_types=None, **kwargs):
-        # Mantém o contrato: precisa ser FABIO_PIPE.
-        # Se input_types não vier, deixa passar e o erro (se houver) aparece na execução.
-        if isinstance(input_types, dict):
-            t = input_types.get("pipe")
-            if t != "FABIO_PIPE":
-                return "Entrada 'pipe' deve ser do tipo FABIO_PIPE (saída do Fabio Pipe In)."
-        return True
-
     def unpack(self, pipe):
-        items = []
-        if isinstance(pipe, dict):
-            items = pipe.get("items", [])
-        if not isinstance(items, list):
-            items = []
+        values: List[Any] = []
 
-        outs: List[Any] = [None] * MAX_SLOTS
-        for i in range(min(len(items), MAX_SLOTS)):
-            outs[i] = items[i]
-        return tuple(outs)
+        if isinstance(pipe, dict) and pipe.get(PIPE_MARKER) is True:
+            v = pipe.get("values", [])
+            if isinstance(v, list):
+                values = v
+            else:
+                values = [v]
+        elif isinstance(pipe, (list, tuple)):
+            values = list(pipe)
+        else:
+            values = [pipe]
+
+        out: List[Any] = [None] * MAX_OUTPUTS
+        for i, val in enumerate(values[:MAX_OUTPUTS]):
+            out[i] = val
+
+        return tuple(out)
+
+
+NODE_CLASS_MAPPINGS = {
+    "FabioDynamicPipeIn": FabioDynamicPipeIn,
+    "FabioDynamicPipeOut": FabioDynamicPipeOut,
+}
+
+NODE_DISPLAY_NAME_MAPPINGS = {
+    "FabioDynamicPipeIn": "Fabio Dynamic Pipe In",
+    "FabioDynamicPipeOut": "Fabio Dynaamic Pipe Out",
+}
