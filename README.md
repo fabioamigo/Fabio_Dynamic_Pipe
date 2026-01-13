@@ -74,6 +74,8 @@ The Update action is triggered from **Pipe In** and attempts to reach all downst
 
 ---
 
-## License
+## License (MIT)
 
-Add a `LICENSE` file (MIT is a common choice) if your repository does not already include one.
+This project is licensed under the **MIT License**.
+
+- See the `LICENSE` file in this repository for the full license text.
