@@ -6,6 +6,16 @@ This is designed to keep graphs clean and to route several objects (MODEL / CLIP
 
 ---
 
+## Video walkthrough
+
+A short demo is included in this repository:
+
+- ▶ **pipevideo.mp4**: [Watch the video](./pipevideo.mp4)
+
+> Note: GitHub usually does not render repository-hosted MP4 videos inline inside a README. The link above opens the file page where it can be played or downloaded, depending on the browser/GitHub renderer. :contentReference[oaicite:2]{index=2}
+
+---
+
 ## Included Nodes
 
 ### 1) Fabio Dynamic Pipe In
