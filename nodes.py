@@ -20,15 +20,26 @@ FABIO_PIPE_TYPE = "FABIO_PIPE"
 class FabioDynamicPipeIn:
     @classmethod
     def INPUT_TYPES(cls) -> Dict[str, Dict[str, Any]]:
-        # Entradas são dinâmicas via JS; o backend aceita **kwargs.
-        return {"required": {}, "optional": {}}
+        # Mantemos pipe_name como widget STRING.
+        # NÃO dependemos mais do seed aqui para a UI, porque o JS cria o socket dinâmico "real".
+        # (mas deixo um optional declarado para compatibilidade)
+        return {
+            "required": {
+                "pipe_name": ("STRING", {"default": "Pipe Principal"}),
+            },
+            "optional": {
+                "optional": ("*",),
+            },
+        }
 
     RETURN_TYPES = (FABIO_PIPE_TYPE,)
     RETURN_NAMES = ("pipe",)
     FUNCTION = "pack"
     CATEGORY = "Fabio/Dynamic Pipe"
 
-    def pack(self, **kwargs):
+    def pack(self, pipe_name: str, **kwargs):
+        pname = (pipe_name or "").strip()
+
         names: List[str] = []
         values: List[Any] = []
 
@@ -40,6 +51,7 @@ class FabioDynamicPipeIn:
 
         pipe = {
             PIPE_MARKER: True,
+            "pipe_name": pname,
             "names": names,
             "values": values,
         }
@@ -49,30 +61,34 @@ class FabioDynamicPipeIn:
 class FabioDynamicPipeOut:
     @classmethod
     def INPUT_TYPES(cls) -> Dict[str, Dict[str, Any]]:
-        return {"required": {"pipe": (FABIO_PIPE_TYPE,)}}
+        return {
+            "required": {
+                "pipe_name": ("STRING", {"default": "Pipe Principal"}),
+            },
+            "optional": {
+                "pipe": (FABIO_PIPE_TYPE,),
+            },
+        }
 
     RETURN_TYPES = tuple(["*"] * MAX_OUTPUTS)
     RETURN_NAMES = tuple([f"out_{i+1}" for i in range(MAX_OUTPUTS)])
     FUNCTION = "unpack"
     CATEGORY = "Fabio/Dynamic Pipe"
 
-    def unpack(self, pipe):
-        values: List[Any] = []
+    def unpack(self, pipe_name: str, pipe=None):
+        if not (isinstance(pipe, dict) and pipe.get(PIPE_MARKER) is True):
+            raise Exception(
+                f'FabioDynamicPipeOut("{pipe_name}"): missing/invalid pipe. '
+                f'Ensure pipe_name matches a Pipe In and queue the workflow (or connect pipe manually).'
+            )
 
-        if isinstance(pipe, dict) and pipe.get(PIPE_MARKER) is True:
-            v = pipe.get("values", [])
-            if isinstance(v, list):
-                values = v
-            else:
-                values = [v]
-        elif isinstance(pipe, (list, tuple)):
-            values = list(pipe)
-        else:
-            values = [pipe]
+        v = pipe.get("values", [])
+        if not isinstance(v, list):
+            v = []
 
-        out: List[Any] = [None] * MAX_OUTPUTS
-        for i, val in enumerate(values[:MAX_OUTPUTS]):
-            out[i] = val
+        out: List[Any] = []
+        for i in range(MAX_OUTPUTS):
+            out.append(v[i] if i < len(v) else None)
 
         return tuple(out)
 
@@ -84,5 +100,5 @@ NODE_CLASS_MAPPINGS = {
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "FabioDynamicPipeIn": "Fabio Dynamic Pipe In",
-    "FabioDynamicPipeOut": "Fabio Dynaamic Pipe Out",
+    "FabioDynamicPipeOut": "Fabio Dynamic Pipe Out",
 }
